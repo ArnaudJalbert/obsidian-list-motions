@@ -1,134 +1,145 @@
-import { App, Editor, MarkdownView, Modal, Notice, Plugin, PluginSettingTab, Setting } from 'obsidian';
+import { Plugin, App, PluginManifest, Editor, MarkdownView } from "obsidian";
 
-// Remember to rename these classes and interfaces!
+export default class ObsidianListMotions extends Plugin {
+	statusBarElement: HTMLSpanElement;
+	listRegex: RegExp;
+	countListRegex: RegExp;
 
-interface MyPluginSettings {
-	mySetting: string;
-}
+	constructor(app: App, manifest: PluginManifest) {
+		super(app, manifest);
+		this.listRegex = /^\s*[-*+] \[([^\]]+)\]/;
+		this.countListRegex = /^\s*[-*+] \[.*?\]/gm;
+	}
 
-const DEFAULT_SETTINGS: MyPluginSettings = {
-	mySetting: 'default'
-}
+	async onload(): Promise<void> {
+		this.initStatusBarAndEventListeners();
 
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+		this.addListMotionCommands();
+	}
 
-	async onload() {
-		await this.loadSettings();
-
-		// This creates an icon in the left ribbon.
-		const ribbonIconEl = this.addRibbonIcon('dice', 'Sample Plugin', (evt: MouseEvent) => {
-			// Called when the user clicks the icon.
-			new Notice('This is a notice!');
-		});
-		// Perform additional things with the ribbon
-		ribbonIconEl.addClass('my-plugin-ribbon-class');
-
-		// This adds a status bar item to the bottom of the app. Does not work on mobile apps.
-		const statusBarItemEl = this.addStatusBarItem();
-		statusBarItemEl.setText('Status Bar Text');
-
-		// This adds a simple command that can be triggered anywhere
+	addListMotionCommands() {
 		this.addCommand({
-			id: 'open-sample-modal-simple',
-			name: 'Open sample modal (simple)',
-			callback: () => {
-				new SampleModal(this.app).open();
-			}
-		});
-		// This adds an editor command that can perform some operation on the current editor instance
-		this.addCommand({
-			id: 'sample-editor-command',
-			name: 'Sample editor command',
+			id: "list-motion-done",
+			name: "Mark List Instance as Done",
 			editorCallback: (editor: Editor, view: MarkdownView) => {
-				console.log(editor.getSelection());
-				editor.replaceSelection('Sample Editor Command');
-			}
+				this.markListAsDone(editor);
+			},
 		});
-		// This adds a complex command that can check whether the current state of the app allows execution of the command
+
 		this.addCommand({
-			id: 'open-sample-modal-complex',
-			name: 'Open sample modal (complex)',
-			checkCallback: (checking: boolean) => {
-				// Conditions to check
-				const markdownView = this.app.workspace.getActiveViewOfType(MarkdownView);
-				if (markdownView) {
-					// If checking is true, we're simply "checking" if the command can be run.
-					// If checking is false, then we want to actually perform the operation.
-					if (!checking) {
-						new SampleModal(this.app).open();
-					}
+			id: "list-motion-open",
+			name: "Mark List Instance as Open",
+			editorCallback: (editor: Editor, view: MarkdownView) => {
+				this.markListAsOpen(editor);
+			},
+		});
 
-					// This command will only show up in Command Palette when the check function returns true
-					return true;
-				}
+		this.addCommand({
+			id: "list-motion-in-progress",
+			name: "Mark List Instance as In Progress",
+			editorCallback: (editor: Editor, view: MarkdownView) => {
+				this.markListAsInProgress(editor);
+			},
+		});
+	}
+
+	async markListAsDone(editor: Editor) {
+		const cursor = editor.getCursor();
+		const line = editor.getLine(cursor.line);
+		const match = line.match(this.listRegex);
+
+		if (!match) {
+			return;
+		}
+
+		const newLine = await this.replaceBracketContent(line, "x");
+		editor.replaceRange(
+			newLine,
+			{ line: cursor.line, ch: 0 },
+			{ line: cursor.line, ch: line.length },
+		);
+	}
+
+	async markListAsOpen(editor: Editor) {
+		const cursor = editor.getCursor();
+		const line = editor.getLine(cursor.line);
+		const match = line.match(this.listRegex);
+
+		if (!match) {
+			return;
+		}
+
+		const newLine = await this.replaceBracketContent(line, " ");
+		editor.replaceRange(
+			newLine,
+			{ line: cursor.line, ch: 0 },
+			{ line: cursor.line, ch: line.length },
+		);
+	}
+
+	async markListAsInProgress(editor: Editor) {
+		const cursor = editor.getCursor();
+		const line = editor.getLine(cursor.line);
+		const match = line.match(this.listRegex);
+
+		if (!match) {
+			return;
+		}
+
+		const newLine = await this.replaceBracketContent(line, "/");
+		editor.replaceRange(
+			newLine,
+			{ line: cursor.line, ch: 0 },
+			{ line: cursor.line, ch: line.length },
+		);
+	}
+
+	async replaceBracketContent(
+		line: string,
+		newText: string,
+	): Promise<string> {
+		return line.replace(/^(\s*[-*+] \[)[^\]]*(\])/, `$1${newText}$2`);
+	}
+
+	initStatusBarAndEventListeners() {
+		// Initialize the status bar element
+		this.statusBarElement = this.addStatusBarItem().createEl("span");
+
+		// Initialize the content of the status bar element
+		this.statusBarElement.textContent = "List Count: 0";
+
+		// Catch leaf change event and update status bar
+		this.app.workspace.on("active-leaf-change", async () => {
+			const file = this.app.workspace.getActiveFile();
+
+			if (!file) {
+				return;
 			}
+
+			const content = await this.app.vault.read(file);
+
+			await this.countAndUpdateListsCount(content);
 		});
 
-		// This adds a settings tab so the user can configure various aspects of the plugin
-		this.addSettingTab(new SampleSettingTab(this.app, this));
+		// Catch editor change event and update status bar
+		this.app.workspace.on("editor-change", async (editor) => {
+			const content = editor.getDoc().getValue();
 
-		// If the plugin hooks up any global DOM events (on parts of the app that doesn't belong to this plugin)
-		// Using this function will automatically remove the event listener when this plugin is disabled.
-		this.registerDomEvent(document, 'click', (evt: MouseEvent) => {
-			console.log('click', evt);
+			await this.countAndUpdateListsCount(content);
 		});
-
-		// When registering intervals, this function will automatically clear the interval when the plugin is disabled.
-		this.registerInterval(window.setInterval(() => console.log('setInterval'), 5 * 60 * 1000));
 	}
 
-	onunload() {
-
+	async countAndUpdateListsCount(content: string): Promise<number> {
+		const lists_count = await this.getListsCount(content);
+		this.updateStatusBar(lists_count);
+		return lists_count;
 	}
 
-	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+	async updateStatusBar(lists_count: number) {
+		this.statusBarElement.textContent = `List Count: ${lists_count}`;
 	}
 
-	async saveSettings() {
-		await this.saveData(this.settings);
-	}
-}
-
-class SampleModal extends Modal {
-	constructor(app: App) {
-		super(app);
-	}
-
-	onOpen() {
-		const {contentEl} = this;
-		contentEl.setText('Woah!');
-	}
-
-	onClose() {
-		const {contentEl} = this;
-		contentEl.empty();
-	}
-}
-
-class SampleSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
-
-	constructor(app: App, plugin: MyPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
-	}
-
-	display(): void {
-		const {containerEl} = this;
-
-		containerEl.empty();
-
-		new Setting(containerEl)
-			.setName('Setting #1')
-			.setDesc('It\'s a secret')
-			.addText(text => text
-				.setPlaceholder('Enter your secret')
-				.setValue(this.plugin.settings.mySetting)
-				.onChange(async (value) => {
-					this.plugin.settings.mySetting = value;
-					await this.plugin.saveSettings();
-				}));
+	async getListsCount(content: string): Promise<number> {
+		return content.match(this.countListRegex)?.length || 0;
 	}
 }
