@@ -86,12 +86,19 @@ export default class ObsidianListMotions extends Plugin {
 			return;
 		}
 
-		const newLine = await this.replaceBracketContent(line, "/");
+		let newLine = await this.replaceBracketContent(line, "/");
+		newLine = await this.replaceTodoTags(newLine);
 		editor.replaceRange(
 			newLine,
 			{ line: cursor.line, ch: 0 },
 			{ line: cursor.line, ch: line.length },
 		);
+	}
+
+	async replaceTodoTags(input: string): Promise<string> {
+		return input.replace(/#todo(\/[^\s]*)?/g, (match, group) => {
+			return group ? "#todo/in-progress" : "#todo/in-progress";
+		});
 	}
 
 	async replaceBracketContent(
